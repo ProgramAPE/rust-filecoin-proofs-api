@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{ensure, Result};
 use filecoin_proofs_v1::types::MerkleTreeTrait;
@@ -9,6 +9,12 @@ use crate::{
     ChallengeSeed, FallbackPoStSectorProof, PoStType, PrivateReplicaInfo, ProverId,
     PublicReplicaInfo, RegisteredPoStProof, SectorId, SnarkProof, Version,
 };
+
+use rayon::prelude::*;
+use std::time::SystemTime;
+use log::info;
+
+use qiniu::service::storage::download::set_download_start_time;
 
 pub fn generate_winning_post_sector_challenge(
     proof_type: RegisteredPoStProof,
@@ -204,7 +210,7 @@ pub fn generate_winning_post(
         prover_id,
     )
 }
-
+/*
 fn generate_winning_post_inner<Tree: 'static + MerkleTreeTrait>(
     registered_proof_v1: RegisteredPoStProof,
     randomness: &ChallengeSeed,
@@ -231,6 +237,53 @@ fn generate_winning_post_inner<Tree: 'static + MerkleTreeTrait>(
             cache_dir.into(),
         )?;
 
+        replicas_v1.push((*id, info_v1));
+    }
+
+    ensure!(!replicas_v1.is_empty(), "missing v1 replicas");
+    let posts_v1 = filecoin_proofs_v1::generate_winning_post::<Tree>(
+        &registered_proof_v1.as_v1_config(),
+        randomness,
+        &replicas_v1,
+        prover_id,
+    )?;
+
+    // once there are multiple versions, merge them before returning
+
+    Ok(vec![(registered_proof_v1, posts_v1)])
+}*/
+
+fn generate_winning_post_inner<Tree: 'static + MerkleTreeTrait>(
+    registered_proof_v1: RegisteredPoStProof,
+    randomness: &ChallengeSeed,
+    replicas: &BTreeMap<SectorId, PrivateReplicaInfo>,
+    prover_id: ProverId,
+) -> Result<Vec<(RegisteredPoStProof, SnarkProof)>> {
+    let timestamp = SystemTime::now();
+    set_download_start_time(&timestamp);
+    let mut replica_map:HashMap<_, _> = replicas.par_iter().map( |(id, info)| {
+        let PrivateReplicaInfo {
+            registered_proof: _registered_proof,
+            comm_r,
+            cache_dir,
+            replica_path,
+        } = info;
+
+        let info_v1 = filecoin_proofs_v1::PrivateReplicaInfo::new(
+            replica_path.clone(),
+            *comm_r,
+            cache_dir.into(),
+        );
+        (id.to_string(), info_v1)
+    }).collect();
+    info!("winning init p_aux {} qiniu-time {:?}", replicas.len(), timestamp);
+    let mut replicas_v1 = Vec::new();
+    for (id, info) in replicas.iter() {
+        ensure!(
+            &(info.registered_proof) == &registered_proof_v1,
+            "can only generate the same kind of PoSt"
+        );
+        let info_v1 = replica_map.remove(&id.to_string()).unwrap()?;
         replicas_v1.push((*id, info_v1));
     }
 
@@ -385,6 +438,7 @@ pub fn generate_window_post(
     )
 }
 
+/*
 fn generate_window_post_inner<Tree: 'static + MerkleTreeTrait>(
     registered_proof_v1: RegisteredPoStProof,
     randomness: &ChallengeSeed,
@@ -411,6 +465,53 @@ fn generate_window_post_inner<Tree: 'static + MerkleTreeTrait>(
             cache_dir.into(),
         )?;
 
+        replicas_v1.insert(*id, info_v1);
+    }
+
+    ensure!(!replicas_v1.is_empty(), "missing v1 replicas");
+    let posts_v1 = filecoin_proofs_v1::generate_window_post::<Tree>(
+        &registered_proof_v1.as_v1_config(),
+        randomness,
+        &replicas_v1,
+        prover_id,
+    )?;
+
+    // once there are multiple versions, merge them before returning
+
+    Ok(vec![(registered_proof_v1, posts_v1)])
+}*/
+
+fn generate_window_post_inner<Tree: 'static + MerkleTreeTrait>(
+    registered_proof_v1: RegisteredPoStProof,
+    randomness: &ChallengeSeed,
+    replicas: &BTreeMap<SectorId, PrivateReplicaInfo>,
+    prover_id: ProverId,
+) -> Result<Vec<(RegisteredPoStProof, SnarkProof)>> {
+    let timestamp = SystemTime::now();
+    set_download_start_time(&timestamp);
+    let mut replica_map:HashMap<_, _> = replicas.par_iter().map( |(id, info)| {
+        let PrivateReplicaInfo {
+            registered_proof: _registered_proof,
+            comm_r,
+            cache_dir,
+            replica_path,
+        } = info;
+        let info_v1 = filecoin_proofs_v1::PrivateReplicaInfo::new(
+            replica_path.clone(),
+            *comm_r,
+            cache_dir.into(),
+        );
+        (id.to_string(), info_v1)
+    }).collect();
+    info!("window init p_aux {} qiniu-time {:?}", replicas.len(), timestamp.elapsed());
+    let mut replicas_v1 = BTreeMap::new();
+
+    for (id, info) in replicas.iter() {
+        ensure!(
+            &(info.registered_proof) == &registered_proof_v1,
+            "can only generate the same kind of PoSt"
+        );
+        let info_v1 = replica_map.remove(&id.to_string()).unwrap()?;
         replicas_v1.insert(*id, info_v1);
     }
 
